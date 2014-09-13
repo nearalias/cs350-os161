@@ -274,6 +274,17 @@ cmd_panic(int nargs, char **args)
 }
 
 /*
+ * Command for enabling the output of debugging messages of type DB_THREADS.
+ */
+static
+int
+cmd_dth()
+{
+  dbflags = 0x0010;
+  return 0;
+}
+
+/*
  * Command for shutting down.
  */
 static
@@ -437,6 +448,7 @@ static const char *opsmenu[] = {
 	"[sync]    Sync filesystems          ",
 	"[panic]   Intentional panic         ",
 	"[q]       Quit and shut down        ",
+  "[dth]     Enable DB_THREADS debugging messages",
 	NULL
 };
 
@@ -545,6 +557,7 @@ static struct {
 	{ "pwd",	cmd_pwd },
 	{ "sync",	cmd_sync },
 	{ "panic",	cmd_panic },
+  { "dth",  cmd_dth },
 	{ "q",		cmd_quit },
 	{ "exit",	cmd_quit },
 	{ "halt",	cmd_quit },

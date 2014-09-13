@@ -1,0 +1,12 @@
+/design
+/kern/compile/*
+!/kern/compile/.keep_me
+/CHANGES
+
+# build products
+/defs.mk
+/build
+/user/*/*/build
+/user/*/*/.depend
+/user/build
+/user/testbin/randcall/calls.c

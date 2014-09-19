@@ -1,4 +1,7 @@
 /os161-1.99/build
 /os161-1.99/defs.mk
+/os161-1.99/kern/compile/*
+!/os161-1.99/kern/compile/.keep_me
 
 /root
+build_install_run

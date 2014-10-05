@@ -147,6 +147,43 @@ V(struct semaphore *sem)
 //
 // Lock.
 
+void
+lock_acquire(struct lock *lock)
+{
+  KASSERT(lock != NULL);
+  KASSERT(curthread->t_in_interrupt == false);
+  spinlock_acquire(&lock->lock_spinlock);
+  while (lock->isLocked) {
+    wchan_lock(lock->lock_wchan);
+    spinlock_release(&lock->lock_spinlock);
+    wchan_sleep(lock->lock_wchan);
+    spinlock_acquire(&lock->lock_spinlock);
+  }
+  lock->t = curthread;
+  lock->isLocked = true;
+  KASSERT(lock_do_i_hold(lock));
+  spinlock_release(&lock->lock_spinlock);
+}
+
+void
+lock_release(struct lock *lock)
+{
+  KASSERT(lock != NULL);
+  spinlock_acquire(&lock->lock_spinlock);
+  lock->isLocked = false;
+  lock->t = NULL;
+  KASSERT(!lock->isLocked && lock->t == NULL);
+  wchan_wakeone(lock->lock_wchan);
+  spinlock_release(&lock->lock_spinlock);
+}
+
+bool
+lock_do_i_hold(struct lock *lock)
+{
+  KASSERT(lock != NULL);
+  return ((lock->isLocked) && (lock->t == curthread));
+}
+
 struct lock *
 lock_create(const char *name)
 {
@@ -162,8 +199,17 @@ lock_create(const char *name)
                 kfree(lock);
                 return NULL;
         }
-        
-        // add stuff here as needed
+
+	lock->lock_wchan = wchan_create(lock->lk_name);
+	if (lock->lock_wchan == NULL) {
+		kfree(lock->lk_name);
+		kfree(lock);
+		return NULL;
+	}
+
+
+  lock->isLocked = false;
+  lock->t = NULL;
         
         return lock;
 }
@@ -174,36 +220,14 @@ lock_destroy(struct lock *lock)
         KASSERT(lock != NULL);
 
         // add stuff here as needed
-        
+  spinlock_cleanup(&lock->lock_spinlock);
+  wchan_destroy(lock->lock_wchan);
+  lock->t = NULL;
         kfree(lock->lk_name);
         kfree(lock);
 }
 
-void
-lock_acquire(struct lock *lock)
-{
-        // Write this
 
-        (void)lock;  // suppress warning until code gets written
-}
-
-void
-lock_release(struct lock *lock)
-{
-        // Write this
-
-        (void)lock;  // suppress warning until code gets written
-}
-
-bool
-lock_do_i_hold(struct lock *lock)
-{
-        // Write this
-
-        (void)lock;  // suppress warning until code gets written
-
-        return true; // dummy until code gets written
-}
 
 ////////////////////////////////////////////////////////////
 //

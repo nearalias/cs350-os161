@@ -50,7 +50,6 @@ catmouse_sync_init(int bowls)
     }
   }
 
-kprintf("---------init--------\n");
   return;
 }
 
@@ -73,7 +72,6 @@ catmouse_sync_cleanup(int bowls)
     lock_destroy(bowlLock[i]);
   }
   kfree(bowlLock);
-kprintf("--------clean--------\n");
 }
 
 void
@@ -81,11 +79,7 @@ cat_before_eating(unsigned int bowl)
 {
   KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
   lock_acquire(bowlLock[bowl-1]);
-int i = 0;
-kprintf("---cat before eating---------bowl %d\n",bowl);
   while (numOfMiceEating != 0) {
-i++;
-kprintf("cat stuck #%d: numOfMiceEating=%d, bowl=%d\n",i,numOfMiceEating,bowl);
     cv_wait(bowlCV, bowlLock[bowl-1]);
   }
   numOfCatsEating++;
@@ -95,7 +89,6 @@ void
 cat_after_eating(unsigned int bowl) 
 {
   KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
-kprintf("---cat after eating---------bowl %d\n",bowl);
   numOfCatsEating--;
   cv_signal(bowlCV, bowlLock[bowl-1]);
   lock_release(bowlLock[bowl-1]);
@@ -106,11 +99,7 @@ mouse_before_eating(unsigned int bowl)
 {
   KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
   lock_acquire(bowlLock[bowl-1]);
-kprintf("---mouse before eating------bowl %d\n",bowl);
-int i = 0;
   while (numOfCatsEating != 0) {
-i++;
-kprintf("mouse stuck #%d: numOfCatsEating=%d, bowl=%d\n",i,numOfCatsEating,bowl);
     cv_wait(bowlCV, bowlLock[bowl-1]);
   }
   numOfMiceEating++;
@@ -120,7 +109,6 @@ void
 mouse_after_eating(unsigned int bowl) 
 {
   KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
-kprintf("---mouse after eating------bowl %d\n",bowl);
   numOfMiceEating--;
   cv_signal(bowlCV, bowlLock[bowl-1]);
   lock_release(bowlLock[bowl-1]);

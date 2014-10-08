@@ -19,8 +19,9 @@
 /*
  * replace this with declarations of any synchronization and other variables you need here
  */
-static struct semaphore *globalCatMouseSem;
-
+volatile int numOfCatsEating, numOfMiceEating;
+static struct lock **bowlLock;
+static struct cv *bowlCV;
 
 /* 
  * The CatMouse simulation will call this function once before any cat or
@@ -33,13 +34,23 @@ static struct semaphore *globalCatMouseSem;
 void
 catmouse_sync_init(int bowls)
 {
-  /* replace this default implementation with your own implementation of catmouse_sync_init */
+  numOfCatsEating = 0;
+  numOfMiceEating = 0;
 
-  (void)bowls; /* keep the compiler from complaining about unused parameters */
-  globalCatMouseSem = sem_create("globalCatMouseSem",1);
-  if (globalCatMouseSem == NULL) {
-    panic("could not create global CatMouse synchronization semaphore");
+  bowlCV = kmalloc(sizeof(struct cv));
+  bowlCV = cv_create("bowlCV");
+  if (bowlCV == NULL) panic("could not create bowl cv");
+
+  bowlLock = kmalloc(sizeof(struct lock) * bowls);
+  int i;
+  for (i = 0; i < bowls; i++) {
+    bowlLock[i] = lock_create("bowlLock");
+    if (bowlLock[i] == NULL) {
+      panic("could not create bowl lock");
+    }
   }
+
+kprintf("---------init--------\n");
   return;
 }
 
@@ -54,95 +65,63 @@ catmouse_sync_init(int bowls)
 void
 catmouse_sync_cleanup(int bowls)
 {
-  /* replace this default implementation with your own implementation of catmouse_sync_cleanup */
-  (void)bowls; /* keep the compiler from complaining about unused parameters */
-  KASSERT(globalCatMouseSem != NULL);
-  sem_destroy(globalCatMouseSem);
+  KASSERT(bowlCV != NULL);
+  cv_destroy(bowlCV);
+  int i;
+  for (i = 0; i < bowls; i++) {
+    KASSERT(bowlLock[i] != NULL);
+    lock_destroy(bowlLock[i]);
+  }
+  kfree(bowlLock);
+kprintf("--------clean--------\n");
 }
-
-
-/*
- * The CatMouse simulation will call this function each time a cat wants
- * to eat, before it eats.
- * This function should cause the calling thread (a cat simulation thread)
- * to block until it is OK for a cat to eat at the specified bowl.
- *
- * parameter: the number of the bowl at which the cat is trying to eat
- *             legal bowl numbers are 1..NumBowls
- *
- * return value: none
- */
 
 void
 cat_before_eating(unsigned int bowl) 
 {
-  /* replace this default implementation with your own implementation of cat_before_eating */
-  (void)bowl;  /* keep the compiler from complaining about an unused parameter */
-  KASSERT(globalCatMouseSem != NULL);
-  P(globalCatMouseSem);
+  KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
+  lock_acquire(bowlLock[bowl-1]);
+int i = 0;
+kprintf("---cat before eating---------bowl %d\n",bowl);
+  while (numOfMiceEating != 0) {
+i++;
+kprintf("cat stuck #%d: numOfMiceEating=%d, bowl=%d\n",i,numOfMiceEating,bowl);
+    cv_wait(bowlCV, bowlLock[bowl-1]);
+  }
+  numOfCatsEating++;
 }
-
-/*
- * The CatMouse simulation will call this function each time a cat finishes
- * eating.
- *
- * You can use this function to wake up other creatures that may have been
- * waiting to eat until this cat finished.
- *
- * parameter: the number of the bowl at which the cat is finishing eating.
- *             legal bowl numbers are 1..NumBowls
- *
- * return value: none
- */
 
 void
 cat_after_eating(unsigned int bowl) 
 {
-  /* replace this default implementation with your own implementation of cat_after_eating */
-  (void)bowl;  /* keep the compiler from complaining about an unused parameter */
-  KASSERT(globalCatMouseSem != NULL);
-  V(globalCatMouseSem);
+  KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
+kprintf("---cat after eating---------bowl %d\n",bowl);
+  numOfCatsEating--;
+  cv_signal(bowlCV, bowlLock[bowl-1]);
+  lock_release(bowlLock[bowl-1]);
 }
-
-/*
- * The CatMouse simulation will call this function each time a mouse wants
- * to eat, before it eats.
- * This function should cause the calling thread (a mouse simulation thread)
- * to block until it is OK for a mouse to eat at the specified bowl.
- *
- * parameter: the number of the bowl at which the mouse is trying to eat
- *             legal bowl numbers are 1..NumBowls
- *
- * return value: none
- */
 
 void
 mouse_before_eating(unsigned int bowl) 
 {
-  /* replace this default implementation with your own implementation of mouse_before_eating */
-  (void)bowl;  /* keep the compiler from complaining about an unused parameter */
-  KASSERT(globalCatMouseSem != NULL);
-  P(globalCatMouseSem);
+  KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
+  lock_acquire(bowlLock[bowl-1]);
+kprintf("---mouse before eating------bowl %d\n",bowl);
+int i = 0;
+  while (numOfCatsEating != 0) {
+i++;
+kprintf("mouse stuck #%d: numOfCatsEating=%d, bowl=%d\n",i,numOfCatsEating,bowl);
+    cv_wait(bowlCV, bowlLock[bowl-1]);
+  }
+  numOfMiceEating++;
 }
-
-/*
- * The CatMouse simulation will call this function each time a mouse finishes
- * eating.
- *
- * You can use this function to wake up other creatures that may have been
- * waiting to eat until this mouse finished.
- *
- * parameter: the number of the bowl at which the mouse is finishing eating.
- *             legal bowl numbers are 1..NumBowls
- *
- * return value: none
- */
 
 void
 mouse_after_eating(unsigned int bowl) 
 {
-  /* replace this default implementation with your own implementation of mouse_after_eating */
-  (void)bowl;  /* keep the compiler from complaining about an unused parameter */
-  KASSERT(globalCatMouseSem != NULL);
-  V(globalCatMouseSem);
+  KASSERT(bowlLock[bowl-1] != NULL && bowlCV != NULL);
+kprintf("---mouse after eating------bowl %d\n",bowl);
+  numOfMiceEating--;
+  cv_signal(bowlCV, bowlLock[bowl-1]);
+  lock_release(bowlLock[bowl-1]);
 }

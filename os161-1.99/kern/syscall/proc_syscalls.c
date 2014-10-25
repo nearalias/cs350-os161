@@ -19,7 +19,7 @@ void sys__exit(int exitcode) {
   struct proc *p = curproc;
   /* for now, just include this to keep the compiler from complaining about
      an unused variable */
-  (void)exitcode;
+  curproc->exitCode = exitcode;
 
   DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
 
@@ -34,6 +34,18 @@ void sys__exit(int exitcode) {
    */
   as = curproc_setas(NULL);
   as_destroy(as);
+
+  V(curproc->procSem); // allow waitpid call to return
+
+  // delay process destruction until waitpid cannot be called,
+  // aka when parent process is NULL
+  if (processes[curproc->parentPid] != NULL) {
+    wchan_lock(processes[curproc->parentPid]->procWchan);
+    wchan_sleep(processes[curproc->parentPid]->procWchan);
+  }
+  processes[curproc->pid] = NULL;
+  // wake up all children processes from their delayed destruction
+  wchan_wakeall(curproc->procWchan);
 
   /* detach this thread from its process */
   /* note: curproc cannot be used after this call */
@@ -53,37 +65,36 @@ void sys__exit(int exitcode) {
 int
 sys_getpid(pid_t *retval)
 {
-  /* for now, this is just a stub that always returns a PID of 1 */
-  /* you need to fix this to make it work properly */
-  *retval = 1;
+  *retval = curproc->pid;
   return(0);
 }
 
 /* stub handler for waitpid() system call                */
 
 int
-sys_waitpid(pid_t pid,
-	    userptr_t status,
-	    int options,
-	    pid_t *retval)
+sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retval)
 {
   int exitstatus;
   int result;
 
-  /* this is just a stub implementation that always reports an
-     exit status of 0, regardless of the actual exit status of
-     the specified process.   
-     In fact, this will return 0 even if the specified process
-     is still running, and even if it never existed in the first place.
-
-     Fix this!
-  */
-
   if (options != 0) {
     return(EINVAL);
   }
-  /* for now, just pretend the exitstatus is 0 */
-  exitstatus = 0;
+  if (processes[pid]->parentPid != curproc->pid) {
+    return(ECHILD);
+  }
+  if (processes[pid] == NULL) {
+    return(ESRCH);
+  }
+  if (status == NULL) {
+    return(EFAULT);
+  }
+
+  P(processes[pid]->procSem);
+  V(processes[pid]->procSem); // in case waitpid gets called more than once after child process exited
+
+  exitstatus = _MKWAIT_EXIT(processes[pid]->exitCode);
+
   result = copyout((void *)&exitstatus,status,sizeof(int));
   if (result) {
     return(result);

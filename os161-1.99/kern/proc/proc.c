@@ -69,6 +69,7 @@ static struct semaphore *proc_count_mutex;
 struct semaphore *no_proc_sem;   
 #endif  // UW
 
+static struct proc **processes;
 
 
 /*
@@ -89,6 +90,31 @@ proc_create(const char *name)
 		kfree(proc);
 		return NULL;
 	}
+
+  proc->pid = -1;
+  for (pid_t i = PID_MIN; i <= PID_MAX; i++) {
+    if (processes[i] != NULL) {
+      processes[i] = proc;
+      proc->pid = i;
+      break;
+    }
+  }
+  if (proc->pid == -1) {
+    kfree(proc);
+    return NULL;
+  }
+
+  proc->procSem = sem_create("process semaphore", 0);
+  if (proc->procSem == NULL) {
+    kfree(proc);
+    return NULL;
+  }
+  proc->procWchan = wchan_create("process wait channel");
+  if (proc->procWchan == NULL) {
+    kfree(proc->procSem);
+    kfree(proc);
+    return NULL;
+  }
 
 	threadarray_init(&proc->p_threads);
 	spinlock_init(&proc->p_lock);
@@ -123,6 +149,9 @@ proc_destroy(struct proc *proc)
 
 	KASSERT(proc != NULL);
 	KASSERT(proc != kproc);
+
+  sem_destroy(proc->procSem);
+  wchan_destroy(proc->procWchan);
 
 	/*
 	 * We don't take p_lock in here because we must have the only
@@ -193,6 +222,10 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
+  for (int i = 0; i <= PID_MAX; i++) {
+    processes[i] = NULL;
+  }
+
   kproc = proc_create("[kernel]");
   if (kproc == NULL) {
     panic("proc_create for kproc failed\n");

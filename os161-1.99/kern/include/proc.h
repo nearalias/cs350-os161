@@ -72,9 +72,12 @@ struct proc {
   pid_t pid; // process id
   pid_t parentPid; // potential parent process id
   int exitCode; // process's exit status if it called _exit
-  struct semaphore *sem; // process semaphore for waitpid
+  struct semaphore *procSem; // process semaphore for waitpid
   struct wchan *procWchan; // wait channel for children processes to sleep on and delay destruction
 };
+
+struct proc * getProc(pid_t pid);
+void setProcToNull(pid_t pid);
 
 /* This is the process structure for the kernel and for kernel-only threads. */
 extern struct proc *kproc;

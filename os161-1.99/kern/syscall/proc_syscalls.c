@@ -9,9 +9,62 @@
 #include <thread.h>
 #include <addrspace.h>
 #include <copyinout.h>
+#include <machine/trapframe.h>
+#include <synch.h>
+#include <proc.h>
+#include <wchan.h>
 
   /* this implementation of sys__exit does not do anything with the exit code */
   /* this needs to be fixed to get exit() and waitpid() working properly */
+
+int sys_fork(struct trapframe *tf, pid_t *retval) {
+  struct proc *child = proc_create_runprogram("child process");
+  if (child == NULL) {
+    return ENPROC;
+  }
+
+  int err = as_copy(curproc_getas(), &child->p_addrspace);
+  if (err) {
+    proc_destroy(child);
+    return err;
+  }
+
+  child->parentPid = curproc->pid;
+
+  struct trapframe *childTF = kmalloc(sizeof(struct trapframe));
+  if (childTF == NULL) {
+    proc_destroy(child);
+    return ENOMEM;
+  }
+
+  *childTF = *tf;
+
+  err = thread_fork("child process thread", child, enter_forked_process, childTF, 0);
+  if (err) {
+    proc_destroy(child);
+    kfree(childTF);
+    childTF = NULL;
+    return err;
+  }
+
+  *retval = child->pid;
+  return 0;
+}
+
+void enter_forked_process(void * tf, unsigned long data2) {
+  (void) data2;
+
+  struct trapframe childTF = *((struct trapframe *) tf);
+  kfree(tf);
+
+  childTF.tf_v0 = 0;
+  childTF.tf_a3 = 0;
+  childTF.tf_epc += 4;
+
+  as_activate();
+
+  mips_usermode(&childTF);
+}
 
 void sys__exit(int exitcode) {
 
@@ -39,11 +92,12 @@ void sys__exit(int exitcode) {
 
   // delay process destruction until waitpid cannot be called,
   // aka when parent process is NULL
-  if (processes[curproc->parentPid] != NULL) {
-    wchan_lock(processes[curproc->parentPid]->procWchan);
-    wchan_sleep(processes[curproc->parentPid]->procWchan);
+
+  if (curproc->parentPid != -1 && getProc(curproc->parentPid) != NULL) {
+    wchan_lock(getProc(curproc->parentPid)->procWchan);
+    wchan_sleep(getProc(curproc->parentPid)->procWchan);
   }
-  processes[curproc->pid] = NULL;
+  setProcToNull(curproc->pid);
   // wake up all children processes from their delayed destruction
   wchan_wakeall(curproc->procWchan);
 
@@ -80,20 +134,20 @@ sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retval)
   if (options != 0) {
     return(EINVAL);
   }
-  if (processes[pid]->parentPid != curproc->pid) {
+  if (getProc(pid)->parentPid != curproc->pid) {
     return(ECHILD);
   }
-  if (processes[pid] == NULL) {
+  if (getProc(pid) == NULL) {
     return(ESRCH);
   }
   if (status == NULL) {
     return(EFAULT);
   }
 
-  P(processes[pid]->procSem);
-  V(processes[pid]->procSem); // in case waitpid gets called more than once after child process exited
+  P(getProc(pid)->procSem);
+  V(getProc(pid)->procSem); // in case waitpid gets called more than once after child process exited
 
-  exitstatus = _MKWAIT_EXIT(processes[pid]->exitCode);
+  exitstatus = _MKWAIT_EXIT(getProc(pid)->exitCode);
 
   result = copyout((void *)&exitstatus,status,sizeof(int));
   if (result) {

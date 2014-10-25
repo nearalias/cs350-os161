@@ -130,8 +130,10 @@ syscall(struct trapframe *tf)
 			    (pid_t *)&retval);
 	  break;
 #endif // UW
-
 	    /* Add stuff here */
+  case SYS_fork:
+    err = sys_fork(tf, (pid_t *)&retval);
+    break;
  
 	default:
 	  kprintf("Unknown syscall %d\n", callno);
@@ -166,18 +168,4 @@ syscall(struct trapframe *tf)
 	KASSERT(curthread->t_curspl == 0);
 	/* ...or leak any spinlocks */
 	KASSERT(curthread->t_iplhigh_count == 0);
-}
-
-/*
- * Enter user mode for a newly forked process.
- *
- * This function is provided as a reminder. You need to write
- * both it and the code that calls it.
- *
- * Thus, you can trash it and do things another way if you prefer.
- */
-void
-enter_forked_process(struct trapframe *tf)
-{
-	(void)tf;
 }

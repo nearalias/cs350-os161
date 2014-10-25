@@ -50,6 +50,8 @@
 #include <vfs.h>
 #include <synch.h>
 #include <kern/fcntl.h>  
+#include <limits.h>
+#include <wchan.h>
 
 /*
  * The process for the kernel; this holds all the kernel-only threads.
@@ -69,8 +71,16 @@ static struct semaphore *proc_count_mutex;
 struct semaphore *no_proc_sem;   
 #endif  // UW
 
-static struct proc **processes;
+static struct proc *processes[PID_MAX+1];
+static struct semaphore *pidMutex;
 
+struct proc * getProc(pid_t pid) {
+  if (processes[pid] == NULL) return NULL;
+  return processes[pid];
+}
+void setProcToNull(pid_t pid) {
+  processes[pid] = NULL;
+}
 
 /*
  * Create a proc structure.
@@ -91,30 +101,7 @@ proc_create(const char *name)
 		return NULL;
 	}
 
-  proc->pid = -1;
-  for (pid_t i = PID_MIN; i <= PID_MAX; i++) {
-    if (processes[i] != NULL) {
-      processes[i] = proc;
-      proc->pid = i;
-      break;
-    }
-  }
-  if (proc->pid == -1) {
-    kfree(proc);
-    return NULL;
-  }
-
-  proc->procSem = sem_create("process semaphore", 0);
-  if (proc->procSem == NULL) {
-    kfree(proc);
-    return NULL;
-  }
-  proc->procWchan = wchan_create("process wait channel");
-  if (proc->procWchan == NULL) {
-    kfree(proc->procSem);
-    kfree(proc);
-    return NULL;
-  }
+  proc->parentPid = -1;
 
 	threadarray_init(&proc->p_threads);
 	spinlock_init(&proc->p_lock);
@@ -150,8 +137,8 @@ proc_destroy(struct proc *proc)
 	KASSERT(proc != NULL);
 	KASSERT(proc != kproc);
 
-  sem_destroy(proc->procSem);
-  wchan_destroy(proc->procWchan);
+  if (proc->procSem != NULL) sem_destroy(proc->procSem);
+  if (proc->procWchan != NULL) wchan_destroy(proc->procWchan);
 
 	/*
 	 * We don't take p_lock in here because we must have the only
@@ -222,8 +209,12 @@ proc_destroy(struct proc *proc)
 void
 proc_bootstrap(void)
 {
-  for (int i = 0; i <= PID_MAX; i++) {
+  for (pid_t i = 0; i <= PID_MAX; i++) {
     processes[i] = NULL;
+  }
+  pidMutex = sem_create("pid mutex", 1);
+  if (pidMutex == NULL) {
+    panic("could not create pid mutex semaphore\n");
   }
 
   kproc = proc_create("[kernel]");
@@ -259,6 +250,34 @@ proc_create_runprogram(const char *name)
 	if (proc == NULL) {
 		return NULL;
 	}
+
+  proc->pid = -1;
+  P(pidMutex);
+  for (pid_t i = PID_MIN; i <= PID_MAX; i++) {
+    if (processes[i] == NULL) {
+      processes[i] = proc;
+      proc->pid = i;
+      break;
+    }
+  }
+  V(pidMutex);
+
+  if (proc->pid == -1) {
+    kfree(proc);
+    return NULL;
+  }
+
+  proc->procSem = sem_create("process semaphore", 0);
+  if (proc->procSem == NULL) {
+    kfree(proc);
+    return NULL;
+  }
+  proc->procWchan = wchan_create("process wait channel");
+  if (proc->procWchan == NULL) {
+    kfree(proc->procSem);
+    kfree(proc);
+    return NULL;
+  }
 
 #ifdef UW
 	/* open the console - this should always succeed */

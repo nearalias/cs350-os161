@@ -43,6 +43,7 @@ void syscall(struct trapframe *tf);
  * Support functions.
  */
 
+int sys_execv(userptr_t progname, userptr_t args);
 int sys_fork(struct trapframe *tf, pid_t *retval);
 /* Helper for fork(). You write this. */
 void enter_forked_process(void * tf, unsigned long data2);

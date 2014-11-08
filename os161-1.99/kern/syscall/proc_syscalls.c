@@ -13,9 +13,75 @@
 #include <synch.h>
 #include <proc.h>
 #include <wchan.h>
+#include <kern/fcntl.h>
+#include <vfs.h>
 
-  /* this implementation of sys__exit does not do anything with the exit code */
-  /* this needs to be fixed to get exit() and waitpid() working properly */
+int sys_execv(userptr_t progname, userptr_t args)
+{
+(void)args;
+	struct addrspace *as, *old_as;
+	struct vnode *v;
+	vaddr_t entrypoint, stackptr;
+	int result;
+
+  if (progname == NULL) {
+    return ENOENT;
+  }
+
+  char *name = kstrdup((char*) progname);
+  if (name == NULL) {
+    return ENOMEM;
+  }
+
+	/* Open the file. */
+	result = vfs_open(name, O_RDONLY, 0, &v);
+	if (result) {
+    kfree(name);
+		return result;
+	}
+  kfree(name);
+
+  as_deactivate();
+  old_as = curproc_setas(NULL);
+  as_destroy(old_as);
+  KASSERT(curproc_getas() == NULL);
+
+	/* Create a new address space. */
+	as = as_create();
+	if (as ==NULL) {
+		vfs_close(v);
+		return ENOMEM;
+	}
+
+	/* Switch to it and activate it. */
+	curproc_setas(as);
+	as_activate();
+
+	/* Load the executable. */
+	result = load_elf(v, &entrypoint);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		vfs_close(v);
+		return result;
+	}
+
+	/* Done with the file now. */
+	vfs_close(v);
+
+	/* Define the user stack in the address space */
+	result = as_define_stack(as, &stackptr);
+	if (result) {
+		/* p_addrspace will go away when curproc is destroyed */
+		return result;
+	}
+
+	/* Warp to user mode. */
+	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
+			  stackptr, entrypoint);
+
+	/* enter_new_process does not return. */
+  return EINVAL;
+}
 
 int sys_fork(struct trapframe *tf, pid_t *retval) {
   struct proc *child = proc_create_runprogram("child process");
@@ -70,8 +136,6 @@ void sys__exit(int exitcode) {
 
   struct addrspace *as;
   struct proc *p = curproc;
-  /* for now, just include this to keep the compiler from complaining about
-     an unused variable */
   curproc->exitCode = exitcode;
 
   DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
@@ -114,16 +178,12 @@ void sys__exit(int exitcode) {
   panic("return from thread_exit in sys_exit\n");
 }
 
-
-/* stub handler for getpid() system call                */
 int
 sys_getpid(pid_t *retval)
 {
   *retval = curproc->pid;
   return(0);
 }
-
-/* stub handler for waitpid() system call                */
 
 int
 sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retval)

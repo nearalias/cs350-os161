@@ -15,23 +15,43 @@
 #include <wchan.h>
 #include <kern/fcntl.h>
 #include <vfs.h>
+#include <limits.h>
 
 int sys_execv(userptr_t progname, userptr_t args)
 {
-(void)args;
 	struct addrspace *as, *old_as;
 	struct vnode *v;
 	vaddr_t entrypoint, stackptr;
-	int result;
+	int result, i, argc = 0;
 
-  if (progname == NULL) {
-    return ENOENT;
+  if (progname == NULL) return ENOENT;
+  if (args == NULL) return EFAULT;
+
+  // count argc
+  char *temp = NULL;
+  while (true) {
+    result = copyin(args+argc*sizeof(char*), &temp, sizeof(char*));
+    if (result) return result;
+    if (temp == NULL) break;
+    argc++;
   }
 
-  char *name = kstrdup((char*) progname);
-  if (name == NULL) {
-    return ENOMEM;
+  // get args into kernel on heap
+  char **kargs = kmalloc(sizeof(char*)*argc);
+  unsigned int *kargs_len = kmalloc(sizeof(int)*argc);
+  if (kargs == NULL) return ENOMEM;
+  for (i = 0; i < argc; i++) {
+    result = copyin(args+i*sizeof(char*), &temp, sizeof(char*));
+    if (result) return result;
+    kargs[i] = kmalloc(1024);
+    result = copyinstr((const_userptr_t)temp, kargs[i], 1024, &kargs_len[i]);
+    if (result) return result;
   }
+
+  // get progname into kernal on heap
+  char *name = kmalloc(PATH_MAX);
+  result = copyinstr((const_userptr_t) progname, name, PATH_MAX, NULL);
+  if (result || name == NULL) return result;
 
 	/* Open the file. */
 	result = vfs_open(name, O_RDONLY, 0, &v);
@@ -41,6 +61,7 @@ int sys_execv(userptr_t progname, userptr_t args)
 	}
   kfree(name);
 
+  // destroy old address space
   as_deactivate();
   old_as = curproc_setas(NULL);
   as_destroy(old_as);
@@ -64,7 +85,6 @@ int sys_execv(userptr_t progname, userptr_t args)
 		vfs_close(v);
 		return result;
 	}
-
 	/* Done with the file now. */
 	vfs_close(v);
 
@@ -75,9 +95,43 @@ int sys_execv(userptr_t progname, userptr_t args)
 		return result;
 	}
 
+  // copyout args as strings
+  char **stack_locations = kmalloc(sizeof(char*)*argc);
+  for (i = argc-1; i >= 0; i--) {
+    stackptr -= kargs_len[i];
+    stack_locations[i] = (char*) stackptr;
+    result = copyoutstr(kargs[i], (userptr_t)stackptr, kargs_len[i], NULL);
+    if (result) return result;
+  }
+
+  // has to be divisible by 4, 8's fine?
+  while (stackptr%8 != 0) stackptr--;
+
+  // copyout args as array
+  stackptr -= sizeof(char*); // NULL at the end of array
+  for (i = argc-1; i >= 0; i--) {
+    stackptr -= sizeof(char*);
+    result = copyout(&stack_locations[i], (userptr_t)stackptr, sizeof(char*));
+    if (result) return result;
+  }
+
+  // argv that points to the first element of array on stack
+  char **argv = (char**) stackptr;
+
+  // kfree args and args_len
+  for (i = 0; i < argc; i++) {
+    kfree(kargs[i]);
+    kargs[i] = NULL;
+  }
+  kfree(kargs);
+  kargs = NULL;
+  kfree(kargs_len);
+  kargs_len = NULL;
+  kfree(stack_locations);
+  stack_locations = NULL;
+
 	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
+	enter_new_process(argc, (userptr_t) argv, stackptr, entrypoint);
 
 	/* enter_new_process does not return. */
   return EINVAL;

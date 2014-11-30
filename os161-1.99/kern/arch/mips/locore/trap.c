@@ -39,6 +39,11 @@
 #include <vm.h>
 #include <mainbus.h>
 #include <syscall.h>
+#include <kern/wait.h>
+#include <proc.h>
+#include <addrspace.h>
+#include <wchan.h>
+#include <synch.h>
 
 
 /* in exception.S */
@@ -73,6 +78,9 @@ static
 void
 kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 {
+  (void) epc;
+  (void) vaddr;
+
 	int sig = 0;
 
 	KASSERT(code < NTRAPCODES);
@@ -108,13 +116,48 @@ kill_curthread(vaddr_t epc, unsigned code, vaddr_t vaddr)
 		break;
 	}
 
-	/*
-	 * You will probably want to change this.
-	 */
+	//kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n", code, sig, trapcodenames[code], epc, vaddr);
 
-	kprintf("Fatal user mode trap %u sig %d (%s, epc 0x%x, vaddr 0x%x)\n",
-		code, sig, trapcodenames[code], epc, vaddr);
-	panic("I don't know how to handle this\n");
+  struct addrspace *as;
+  struct proc *p = curproc;
+  curproc->exitCode = _MKWAIT_SIG(sig);
+
+  KASSERT(curproc->p_addrspace != NULL);
+  as_deactivate();
+  /*
+   * clear p_addrspace before calling as_destroy. Otherwise if
+   * as_destroy sleeps (which is quite possible) when we
+   * come back we'll be calling as_activate on a
+   * half-destroyed address space. This tends to be
+   * messily fatal.
+   */
+  as = curproc_setas(NULL);
+  as_destroy(as);
+
+  V(curproc->procSem); // allow waitpid call to return
+
+  // delay process destruction until waitpid cannot be called,
+  // aka when parent process is NULL
+
+  if (curproc->parentPid != -1 && getProc(curproc->parentPid) != NULL) {
+    wchan_lock(getProc(curproc->parentPid)->procWchan);
+    wchan_sleep(getProc(curproc->parentPid)->procWchan);
+  }
+  setProcToNull(curproc->pid);
+  // wake up all children processes from their delayed destruction
+  wchan_wakeall(curproc->procWchan);
+
+  /* detach this thread from its process */
+  /* note: curproc cannot be used after this call */
+  proc_remthread(curthread);
+
+  /* if this is the last user process in the system, proc_destroy()
+     will wake up the kernel menu thread */
+  proc_destroy(p);
+
+  thread_exit();
+  /* thread_exit() does not return, so we should never get here */
+	panic("dead threads tell no tale\n");
 }
 
 /*

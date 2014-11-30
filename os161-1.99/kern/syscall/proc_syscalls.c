@@ -190,7 +190,7 @@ void sys__exit(int exitcode) {
 
   struct addrspace *as;
   struct proc *p = curproc;
-  curproc->exitCode = exitcode;
+  curproc->exitCode = _MKWAIT_EXIT(exitcode);
 
   DEBUG(DB_SYSCALL,"Syscall: _exit(%d)\n",exitcode);
 
@@ -261,7 +261,7 @@ sys_waitpid(pid_t pid, userptr_t status, int options, pid_t *retval)
   P(getProc(pid)->procSem);
   V(getProc(pid)->procSem); // in case waitpid gets called more than once after child process exited
 
-  exitstatus = _MKWAIT_EXIT(getProc(pid)->exitCode);
+  exitstatus = getProc(pid)->exitCode;
 
   result = copyout((void *)&exitstatus,status,sizeof(int));
   if (result) {

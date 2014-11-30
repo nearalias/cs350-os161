@@ -122,8 +122,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 
 	switch (faulttype) {
 	    case VM_FAULT_READONLY:
-		/* We always create pages read-write, so we can't get this */
-		panic("dumbvm: got VM_FAULT_READONLY\n");
+        return EFAULT;
 	    case VM_FAULT_READ:
 	    case VM_FAULT_WRITE:
 		break;
@@ -170,8 +169,10 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 	stackbase = USERSTACK - DUMBVM_STACKPAGES * PAGE_SIZE;
 	stacktop = USERSTACK;
 
+  bool isReadOnlySegment = false;
 	if (faultaddress >= vbase1 && faultaddress < vtop1) {
 		paddr = (faultaddress - vbase1) + as->as_pbase1;
+    isReadOnlySegment = true;
 	}
 	else if (faultaddress >= vbase2 && faultaddress < vtop2) {
 		paddr = (faultaddress - vbase2) + as->as_pbase2;
@@ -196,6 +197,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 		}
 		ehi = faultaddress;
 		elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+    elo = (isReadOnlySegment && as->loadedElf) ? elo & ~TLBLO_DIRTY : elo;
 		DEBUG(DB_VM, "dumbvm: 0x%x -> 0x%x\n", faultaddress, paddr);
 		tlb_write(ehi, elo, i);
 		splx(spl);
@@ -205,6 +207,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
   // reaching here means we ran out of TLB entries, so we randomly replace one
   ehi = faultaddress;
   elo = paddr | TLBLO_DIRTY | TLBLO_VALID;
+  elo = (isReadOnlySegment && as->loadedElf) ? elo & ~TLBLO_DIRTY : elo;
   tlb_random(ehi, elo);
 	splx(spl);
 	return 0;
@@ -225,6 +228,7 @@ as_create(void)
 	as->as_pbase2 = 0;
 	as->as_npages2 = 0;
 	as->as_stackpbase = 0;
+  as->loadedElf = false;
 
 	return as;
 }
@@ -343,7 +347,19 @@ as_prepare_load(struct addrspace *as)
 int
 as_complete_load(struct addrspace *as)
 {
-	(void)as;
+	int i, spl;
+
+	/* Disable interrupts on this CPU while frobbing the TLB. */
+	spl = splhigh();
+
+  as->loadedElf = true;
+  // flush TLB
+	for (i=0; i<NUM_TLB; i++) {
+		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+	}
+
+	splx(spl);
+
 	return 0;
 }
 

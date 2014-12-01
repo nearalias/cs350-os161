@@ -53,24 +53,58 @@
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 
+static int *coremap;
+static struct spinlock coremapLock = SPINLOCK_INITIALIZER;
+static paddr_t lo, hi;
+static bool coremapInitialized = false;
+static int numOfFrames;
+
 void
 vm_bootstrap(void)
 {
-	/* Do nothing. */
+  spinlock_acquire(&coremapLock);
+
+  ram_getsize(&lo, &hi);
+  numOfFrames = (hi-lo)/PAGE_SIZE;
+  unsigned long coremapSize = sizeof(int)*numOfFrames;
+  int numOfCoremapFrames = (coremapSize + PAGE_SIZE - 1) / PAGE_SIZE;
+  coremap = (int*) PADDR_TO_KVADDR(lo);
+
+  for (int i = 0; i < numOfCoremapFrames; i++) coremap[i] = 1;
+  for (int i = numOfCoremapFrames; i < numOfFrames; i++) coremap[i] = 0;
+
+  coremapInitialized = true;
+
+  spinlock_release(&coremapLock);
 }
 
 static
 paddr_t
 getppages(unsigned long npages)
 {
-	paddr_t addr;
+  paddr_t addr;
 
-	spinlock_acquire(&stealmem_lock);
+  spinlock_acquire(&stealmem_lock);
 
-	addr = ram_stealmem(npages);
-	
-	spinlock_release(&stealmem_lock);
-	return addr;
+  if (!coremapInitialized) addr = ram_stealmem(npages);
+  else {
+    for (int i = 0; i < numOfFrames; i++) {
+      unsigned long emptyCount = 0;
+      if (!coremap[i]) {
+        for (unsigned long k = i; k < i+npages && (int)k < numOfFrames; k++)
+          if (!coremap[k]) emptyCount++;
+        if (emptyCount == npages) {
+          addr = lo + i*PAGE_SIZE;
+          for (unsigned long k = i; k < i+npages; k++) coremap[k] = npages;
+          break;
+        }
+      }
+    }
+  }
+
+  spinlock_release(&stealmem_lock);
+
+  return addr;
 }
 
 /* Allocate/free some kernel-space virtual pages */
@@ -88,9 +122,15 @@ alloc_kpages(int npages)
 void 
 free_kpages(vaddr_t addr)
 {
-	/* nothing - leak the memory. */
+  spinlock_acquire(&coremapLock);
 
-	(void)addr;
+  paddr_t paddr = addr - MIPS_KSEG0;
+  int targetFrame = (paddr - lo) / PAGE_SIZE;
+  int npagesToDelete = coremap[targetFrame];
+  for (int i = 0; i < npagesToDelete; i++)
+    coremap[targetFrame+i] = 0;
+
+  spinlock_release(&coremapLock);
 }
 
 void
@@ -222,12 +262,12 @@ as_create(void)
 	}
 
 	as->as_vbase1 = 0;
-	as->as_pbase1 = 0;
+  as->as_pbase1 = 0;
 	as->as_npages1 = 0;
 	as->as_vbase2 = 0;
-	as->as_pbase2 = 0;
+  as->as_pbase2 = 0;
 	as->as_npages2 = 0;
-	as->as_stackpbase = 0;
+  as->as_stackpbase = 0;
   as->loadedElf = false;
 
 	return as;
@@ -386,6 +426,7 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 	new->as_npages1 = old->as_npages1;
 	new->as_vbase2 = old->as_vbase2;
 	new->as_npages2 = old->as_npages2;
+  new->loadedElf = old->loadedElf;
 
 	/* (Mis)use as_prepare_load to allocate some physical memory. */
 	if (as_prepare_load(new)) {
